@@ -1,0 +1,8 @@
+{
+  "name": "dex-backend",
+  "private": true,
+  "scripts": {
+    "dev": "go run .",
+    "dev:backend": "go run ."
+  }
+}

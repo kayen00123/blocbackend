@@ -1,0 +1,21 @@
+# Environment — never commit real secrets
+.env
+.env.local
+.env.*.local
+
+# Compiled binaries
+*.exe
+*.exe~
+dex-backend
+dex-backend-*
+backend.exe
+test_build.exe
+
+# Test / build logs
+go-test-log.txt
+test-output.txt
+test-status.txt
+
+# OS
+.DS_Store
+Thumbs.db
