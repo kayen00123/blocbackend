@@ -632,6 +632,19 @@ func normalizeFillAmountQuote(amountQuote, quoteAddress, quoteSymbol string) flo
 	return amountNormalized
 }
 
+func fillCandleTimeFilter(args []any, startTimeMs, endTimeMs int64) (string, []any) {
+	filter := ""
+	if startTimeMs > 0 {
+		args = append(args, time.UnixMilli(startTimeMs))
+		filter += fmt.Sprintf(" AND created_at >= $%d", len(args))
+	}
+	if endTimeMs > 0 {
+		args = append(args, time.UnixMilli(endTimeMs))
+		filter += fmt.Sprintf(" AND created_at <= $%d", len(args))
+	}
+	return filter, args
+}
+
 func sumConfirmedFillVolume24h(ctx context.Context, db *sql.DB, pairID string) (float64, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT COALESCE(NULLIF(amount_quote, ''), '0'), COALESCE(NULLIF(quote_token_address, ''), ''), COALESCE(NULLIF(quote_token_symbol, ''), '')
@@ -899,53 +912,53 @@ SELECT address, pool_type, network, base_symbol, quote_symbol, base_mint, quote_
 	  CAST(NULL AS DOUBLE PRECISION) as liquidity, CAST(NULL AS DOUBLE PRECISION) as volume_24h, updated_at
 FROM (
   SELECT p.address, p.pool_type, p.network, p.base_symbol, p.quote_symbol, p.base_mint, p.quote_mint,
-	  p.base_logo_url, p.quote_logo_url, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at
+	  p.base_logo_url, p.quote_logo_url, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at
   FROM pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.network, p.token_mint_0_symbol, p.token_mint_1_symbol, p.token_mint_0, p.token_mint_1,
-	  p.token_mint_0_logo_url, p.token_mint_1_logo_url, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM raydium_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  p.token_mint_0_logo_url, p.token_mint_1_logo_url, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM raydium_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.network, p.token_a_symbol, p.token_b_symbol, p.token_a_mint, p.token_b_mint,
-	  p.token_a_logo_url, p.token_b_logo_url, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM meteora_damm_v2_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  p.token_a_logo_url, p.token_b_logo_url, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM meteora_damm_v2_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.network, p.token_x_symbol, p.token_y_symbol, p.token_x_mint, p.token_y_mint,
-	  p.token_x_logo_url, p.token_y_logo_url, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM meteora_dlmm_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  p.token_x_logo_url, p.token_y_logo_url, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM meteora_dlmm_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.network, p.token_mint_a_symbol, p.token_mint_b_symbol, p.token_mint_a, p.token_mint_b,
-	  p.token_mint_a_logo_url, p.token_mint_b_logo_url, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM orca_whirlpools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  p.token_mint_a_logo_url, p.token_mint_b_logo_url, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM orca_whirlpools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.token0_symbol, p.token1_symbol, p.token0, p.token1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_pancakeswap_v2_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_pancakeswap_v2_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.token0_symbol, p.token1_symbol, p.token0, p.token1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_pancakeswap_v3_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_pancakeswap_v3_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.token0_symbol, p.token1_symbol, p.token0, p.token1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_uniswap_v3_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_uniswap_v3_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.currency0_symbol, p.currency1_symbol, p.currency0, p.currency1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_uniswap_v4_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_uniswap_v4_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.currency0_symbol, p.currency1_symbol, p.currency0, p.currency1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM base_uniswap_v4_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM base_uniswap_v4_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.token0_symbol, p.token1_symbol, p.token0, p.token1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM base_uniswap_v3_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM base_uniswap_v3_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.token0_symbol, p.token1_symbol, p.token0, p.token1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM aerodrome_slipstream_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM aerodrome_slipstream_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.currency0_symbol, p.currency1_symbol, p.currency0, p.currency1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_pancakeswap_infinity_cl_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM bsc_pancakeswap_infinity_cl_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.token0_symbol, p.token1_symbol, p.token0, p.token1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM robinhood_uniswap_v2_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM robinhood_uniswap_v2_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.token0_symbol, p.token1_symbol, p.token0, p.token1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM robinhood_uniswap_v3_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM robinhood_uniswap_v3_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
   UNION ALL
   SELECT p.address, p.pool_type, p.chain, p.currency0_symbol, p.currency1_symbol, p.currency0, p.currency1,
-	  NULL::text, NULL::text, lp.price, lp.inverse_price, lp.price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM robinhood_uniswap_v4_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
+	  NULL::text, NULL::text, lp.price, lp.inverse_price, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h, lp.updated_at FROM robinhood_uniswap_v4_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
 ) pairs
 WHERE ($1 = '' OR network = $1)
 ORDER BY (price IS NULL), updated_at DESC NULLS LAST, network, COALESCE(base_symbol, base_mint), COALESCE(quote_symbol, quote_mint)
@@ -1221,6 +1234,7 @@ func checkConditionalOrders(db *sql.DB, hub *pairHub) {
 				for _, fill := range fills {
 					hub.broadcast(map[string]any{"type": "order_fill", "fill": fill})
 					broadcastPairUpdate(context.Background(), db, hub, fill.PairID)
+					go broadcastCandleUpdate(db, hub, fill.PairID)
 				}
 				// Broadcast the order status update so the UI reflects the triggered state.
 				var triggeredOrder StoredOrder
@@ -1308,6 +1322,7 @@ func reconcileOpenOrders(db *sql.DB, hub *pairHub) {
 				log.Printf("order reconciliation matched fill=%d maker=%d taker=%d amount=%s price=%s", fill.ID, fill.MakerOrderID, fill.TakerOrderID, fill.Amount, fill.Price)
 				hub.broadcast(map[string]any{"type": "order_fill", "fill": fill})
 				broadcastPairUpdate(context.Background(), db, hub, fill.PairID)
+				go broadcastCandleUpdate(db, hub, fill.PairID)
 			}
 		}
 		time.Sleep(2 * time.Second)
@@ -2035,6 +2050,7 @@ func createOrderHandler(db *sql.DB, hub *pairHub) http.HandlerFunc {
 					for _, fill := range fills {
 						hub.broadcast(map[string]any{"type": "order_fill", "fill": fill})
 						broadcastPairUpdate(r.Context(), db, hub, fill.PairID)
+						go broadcastCandleUpdate(db, hub, fill.PairID)
 					}
 				}
 				child := order
@@ -2104,6 +2120,7 @@ func createOrderHandler(db *sql.DB, hub *pairHub) http.HandlerFunc {
 			for _, fill := range fills {
 				hub.broadcast(map[string]any{"type": "order_fill", "fill": fill})
 				broadcastPairUpdate(r.Context(), db, hub, fill.PairID)
+				go broadcastCandleUpdate(db, hub, fill.PairID)
 			}
 		}
 		if err := db.QueryRowContext(r.Context(), `SELECT status, filled_amount FROM dex_orders WHERE id=$1`, order.ID).Scan(&order.Status, &order.FilledAmount); err != nil {
@@ -2631,9 +2648,7 @@ func buildDexCandles(
 		return nil, fmt.Errorf("unsupported interval: %s", interval)
 	}
 
-	// Resolve base token decimals so we can convert wei amounts to human units.
-	// Also detect if this pair needs fill price pre-inversion (see comment in scan loop below).
-	quoteDecimals := 18
+	// Detect if this pair needs fill price pre-inversion (see comment in scan loop below).
 	shouldInvert := false
 	var bd, qd int
 	var baseSymbolStr string
@@ -2654,26 +2669,28 @@ func buildDexCandles(
 		UNION ALL SELECT token_x_decimals, token_y_decimals, COALESCE(token_x_symbol,'') FROM meteora_dlmm_pools WHERE address=$1
 		UNION ALL SELECT token_mint_a_decimals, token_mint_b_decimals, COALESCE(token_mint_a_symbol,'') FROM orca_whirlpools WHERE address=$1
 		LIMIT 1`, pairID).Scan(&bd, &qd, &baseSymbolStr); err == nil {
-		quoteDecimals = qd
 		upper := strings.ToUpper(strings.TrimSpace(baseSymbolStr))
 		if _, ok := flipTokens[upper]; ok && upper != "" {
 			shouldInvert = true
 		}
 	}
 
-	// Build time-range filters.
-	args := []any{pairID, bucketSecs}
-	timeFilter := ""
-	if startTime > 0 {
-		args = append(args, startTime)
-		timeFilter += fmt.Sprintf(" AND EXTRACT(EPOCH FROM created_at) >= $%d", len(args))
+	// Bound fill scans to the requested window, or the latest `limit` buckets.
+	bucketMs := bucketSecs * 1000
+	fillStartTime := startTime
+	if limit > 0 {
+		anchorTime := endTime
+		if anchorTime <= 0 {
+			anchorTime = time.Now().UnixMilli()
+		}
+		latestBucket := anchorTime - anchorTime%bucketMs
+		windowStart := latestBucket - int64(limit-1)*bucketMs
+		if fillStartTime == 0 || fillStartTime < windowStart {
+			fillStartTime = windowStart
+		}
 	}
-	if endTime > 0 {
-		args = append(args, endTime)
-		timeFilter += fmt.Sprintf(" AND EXTRACT(EPOCH FROM created_at) <= $%d", len(args))
-	}
-	args = append(args, quoteDecimals)
-	args = append(args, limit)
+	// The candle API uses Unix milliseconds; PostgreSQL created_at is a timestamp.
+	timeFilter, args := fillCandleTimeFilter([]any{pairID, bucketSecs}, fillStartTime, endTime)
 
 	// Aggregate fills into OHLCV buckets using the actual quote asset metadata on each
 	// fill row. Pool metadata is not authoritative for chart volume because the canonical
@@ -2681,19 +2698,23 @@ func buildDexCandles(
 	// pair is inverted or the quote asset is a wrapped asset like WETH on Base.
 	fillQuery := `
 		SELECT
-			EXTRACT(EPOCH FROM created_at)::bigint,
-			price::double precision,
-			amount_quote,
+			FLOOR(EXTRACT(EPOCH FROM created_at) / $2)::bigint * $2,
+			(array_agg(price::double precision ORDER BY created_at ASC, id ASC))[1],
+			MAX(price::double precision),
+			MIN(price::double precision),
+			(array_agg(price::double precision ORDER BY created_at DESC, id DESC))[1],
 			COALESCE(NULLIF(quote_token_address, ''), ''),
-			COALESCE(NULLIF(quote_token_symbol, ''), '')
+			COALESCE(NULLIF(quote_token_symbol, ''), ''),
+			SUM(COALESCE(NULLIF(amount_quote, ''), '0')::numeric)::text
 		FROM dex_fills
 		WHERE pair_id = $1
 		  AND settlement_status = 'confirmed'
 		  AND price <> '' AND price IS NOT NULL
 		  ` + timeFilter + `
-		ORDER BY created_at ASC, id ASC`
+		GROUP BY 1, 6, 7
+		ORDER BY 1 ASC`
 
-	rows, err := db.QueryContext(ctx, fillQuery, pairID)
+	rows, err := db.QueryContext(ctx, fillQuery, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2701,29 +2722,19 @@ func buildDexCandles(
 
 	bucketMap := make(map[int64]*PairCandle)
 	for rows.Next() {
-		var createdAtUnix int64
-		var fillPrice float64
-		var amountQuote, quoteAddress, quoteSymbol string
-		if err := rows.Scan(&createdAtUnix, &fillPrice, &amountQuote, &quoteAddress, &quoteSymbol); err != nil {
+		var bucketSeconds int64
+		var open, high, low, close float64
+		var quoteAddress, quoteSymbol, amountQuote string
+		if err := rows.Scan(&bucketSeconds, &open, &high, &low, &close, &quoteAddress, &quoteSymbol, &amountQuote); err != nil {
 			return nil, err
 		}
-		bucketStart := (createdAtUnix / bucketSecs) * bucketSecs * 1000
+		bucketStart := bucketSeconds * 1000
 		bucket, ok := bucketMap[bucketStart]
 		if !ok {
-			bucket = &PairCandle{Timestamp: bucketStart, Open: fillPrice, High: fillPrice, Low: fillPrice, Close: fillPrice, Volume: 0}
+			bucket = &PairCandle{Timestamp: bucketStart, Open: open, High: high, Low: low, Close: close, Volume: 0}
 			bucketMap[bucketStart] = bucket
 		}
-		if fillPrice > bucket.High {
-			bucket.High = fillPrice
-		}
-		if fillPrice < bucket.Low || bucket.Low == 0 {
-			bucket.Low = fillPrice
-		}
-		bucket.Close = fillPrice
 		bucket.Volume += normalizeFillAmountQuote(amountQuote, quoteAddress, quoteSymbol)
-		if bucket.Open == 0 {
-			bucket.Open = fillPrice
-		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -3411,12 +3422,12 @@ func querySearchPairs(ctx context.Context, db *sql.DB, network string, query str
 			liquidity, volume_24h, updated_at
 		FROM (
 			SELECT p.address, p.pool_type, p.network, p.base_symbol, p.quote_symbol, p.base_mint, p.quote_mint,
-				p.base_logo_url, p.quote_logo_url, lp.price, lp.inverse_price, lp.token_price_usd, lp.price_change_percent, lp.high_24h, lp.low_24h,
+				p.base_logo_url, p.quote_logo_url, lp.price, lp.inverse_price, lp.token_price_usd, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h,
 				CAST(NULL AS DOUBLE PRECISION) as liquidity, CAST(NULL AS DOUBLE PRECISION) as volume_24h, lp.updated_at
 			FROM pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
 			UNION ALL
 			SELECT p.address, p.pool_type, p.network, p.token_mint_0_symbol, p.token_mint_1_symbol, p.token_mint_0, p.token_mint_1,
-				p.token_mint_0_logo_url, p.token_mint_1_logo_url, lp.price, lp.inverse_price, lp.token_price_usd, lp.price_change_percent, lp.high_24h, lp.low_24h,
+				p.token_mint_0_logo_url, p.token_mint_1_logo_url, lp.price, lp.inverse_price, lp.token_price_usd, COALESCE(lp.price_change_24h, lp.price_change_percent) AS price_change_percent, lp.high_24h, lp.low_24h,
 				CAST(NULL AS DOUBLE PRECISION) as liquidity, CAST(NULL AS DOUBLE PRECISION) as volume_24h, lp.updated_at
 			FROM raydium_pools p LEFT JOIN latest_prices lp ON lp.pool_address = p.address
 		) pairs
