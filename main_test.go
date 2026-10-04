@@ -7,6 +7,8 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +16,26 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func TestLoadEnvFileFallsBackFromPlaceholder(t *testing.T) {
+	t.Setenv("SETTLEMENT_API_KEY", "")
+
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "backend.env")
+	rootPath := filepath.Join(dir, "root.env")
+	if err := os.WriteFile(localPath, []byte("SETTLEMENT_API_KEY=replace-with-a-long-random-local-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rootPath, []byte("SETTLEMENT_API_KEY=the-shared-test-key\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	loadEnvFile(localPath)
+	loadEnvFile(rootPath)
+	if got := os.Getenv("SETTLEMENT_API_KEY"); got != "the-shared-test-key" {
+		t.Fatalf("SETTLEMENT_API_KEY = %q, want root env value", got)
+	}
+}
 
 func encodeBase58(value []byte) string {
 	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -60,7 +82,7 @@ func TestVerifySolanaOrderSignature(t *testing.T) {
 	}
 	order.Maker = encodeBase58(publicKey)
 	body := canonicalSolanaOrderBody(order)
-	order.Signature = encodeBase58(ed25519.Sign(privateKey, append([]byte("Aster DEX Order:\n"), body...)))
+	order.Signature = encodeBase58(ed25519.Sign(privateKey, append([]byte("AltBloc DEX Order:\n"), body...)))
 	if err := verifySolanaOrderSignature(order); err != nil {
 		t.Fatalf("valid Solana signature rejected: %v", err)
 	}
@@ -102,7 +124,7 @@ func TestVerifySolanaOrderSignatureUsesCanonicalKeyOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	order.Signature = encodeBase58(ed25519.Sign(privateKey, append([]byte("Aster DEX Order:\n"), body...)))
+	order.Signature = encodeBase58(ed25519.Sign(privateKey, append([]byte("AltBloc DEX Order:\n"), body...)))
 	if err := verifySolanaOrderSignature(order); err != nil {
 		t.Fatalf("canonical key-order Solana signature rejected: %v", err)
 	}
@@ -371,5 +393,26 @@ func TestFillInactiveCandleGapsCarriesForwardClose(t *testing.T) {
 	}
 	if candles[1].Timestamp != 120_000 || candles[1].Open != 10 || candles[1].High != 10 || candles[1].Low != 10 || candles[1].Close != 10 || candles[1].Volume != 0 {
 		t.Fatalf("inactive candle was not a flat zero-volume carry-forward: %+v", candles[1])
+	}
+}
+
+func TestFillCandleTimeFilterUsesUnixMilliseconds(t *testing.T) {
+	startTimeMs := int64(1_700_000_123_456)
+	endTimeMs := int64(1_700_000_234_567)
+	filter, args := fillCandleTimeFilter([]any{"pair", int64(60)}, startTimeMs, endTimeMs)
+
+	if filter != " AND created_at >= $3 AND created_at <= $4" {
+		t.Fatalf("unexpected time filter: %q", filter)
+	}
+	if len(args) != 4 {
+		t.Fatalf("got %d query args, want 4", len(args))
+	}
+	start, ok := args[2].(time.Time)
+	if !ok || !start.Equal(time.UnixMilli(startTimeMs)) {
+		t.Fatalf("start argument = %#v, want %v", args[2], time.UnixMilli(startTimeMs))
+	}
+	end, ok := args[3].(time.Time)
+	if !ok || !end.Equal(time.UnixMilli(endTimeMs)) {
+		t.Fatalf("end argument = %#v, want %v", args[3], time.UnixMilli(endTimeMs))
 	}
 }

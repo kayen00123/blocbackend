@@ -46,6 +46,9 @@ func loadEnvFile(path string) {
 		}
 		key := strings.TrimSpace(parts[0])
 		value := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+		if strings.HasPrefix(strings.ToLower(value), "replace-with-") {
+			continue
+		}
 		if key != "" && os.Getenv(key) == "" {
 			_ = os.Setenv(key, value)
 		}
@@ -273,7 +276,7 @@ func verifySolanaOrderSignature(order CreateOrderRequest) error {
 
 	body := canonicalSolanaOrderBody(order)
 	messageCandidates := [][]byte{
-		append([]byte("Aster DEX Order:\n"), body...),
+		append([]byte("AltBloc DEX Order:\n"), body...),
 		body,
 	}
 	for _, message := range messageCandidates {
