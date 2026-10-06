@@ -382,6 +382,15 @@ func TestPairHubBroadcastSerializesConcurrentWrites(t *testing.T) {
 	}
 }
 
+func TestPairCandleQueryOrderUsesNewestRowsForUnboundedPolls(t *testing.T) {
+	if got := pairCandleQueryOrder(0, 0); got != "DESC" {
+		t.Fatalf("unbounded candle polls should query newest rows first, got %q", got)
+	}
+	if got := pairCandleQueryOrder(1_000, 2_000); got != "ASC" {
+		t.Fatalf("bounded history ranges should stay oldest-first, got %q", got)
+	}
+}
+
 func TestFillInactiveCandleGapsCarriesForwardClose(t *testing.T) {
 	candles := fillInactiveCandleGaps([]PairCandle{
 		{Timestamp: 60_000, Open: 10, High: 11, Low: 9, Close: 10, Volume: 2},
