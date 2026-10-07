@@ -3640,6 +3640,64 @@ func pairEventPayload(event pairEventNotification, pairs []Pair) any {
 	return nil
 }
 
+func pairEventBatchPayloads(network string, events map[string]pairEventNotification, pairs []Pair) []any {
+	for _, event := range events {
+		if event.PairID == "" {
+			return []any{map[string]any{"type": "snapshot", "network": network, "pairs": pairs}}
+		}
+	}
+
+	changed := make(map[string]struct{}, len(events))
+	removed := make([]string, 0)
+	for pairID, event := range events {
+		if strings.EqualFold(event.Action, "DELETE") {
+			removed = append(removed, pairID)
+		} else {
+			changed[pairID] = struct{}{}
+		}
+	}
+
+	payloads := make([]any, 0, 1+len(removed))
+	updated := make([]Pair, 0, len(changed))
+	for _, pair := range pairs {
+		if _, ok := changed[pair.ID]; ok {
+			updated = append(updated, pair)
+		}
+	}
+	if len(updated) > 0 {
+		payloads = append(payloads, map[string]any{"type": "pair_update", "network": network, "pairs": updated})
+	}
+	for _, pairID := range removed {
+		payloads = append(payloads, map[string]any{"type": "pair_removed", "network": network, "pairId": pairID})
+	}
+	return payloads
+}
+
+func resolvePairNetwork(ctx context.Context, db *sql.DB, pairID string) string {
+	var network string
+	err := db.QueryRowContext(ctx, `
+		SELECT network FROM pools WHERE address=$1
+		UNION ALL SELECT 'bsc' FROM bsc_pancakeswap_v2_pools WHERE address=$1
+		UNION ALL SELECT 'bsc' FROM bsc_pancakeswap_v3_pools WHERE address=$1
+		UNION ALL SELECT 'bsc' FROM bsc_uniswap_v3_pools WHERE address=$1
+		UNION ALL SELECT 'bsc' FROM bsc_uniswap_v4_pools WHERE address=$1
+		UNION ALL SELECT 'base' FROM base_uniswap_v3_pools WHERE address=$1
+		UNION ALL SELECT 'base' FROM base_uniswap_v4_pools WHERE address=$1
+		UNION ALL SELECT 'base' FROM aerodrome_slipstream_pools WHERE address=$1
+		UNION ALL SELECT 'robinhood' FROM robinhood_uniswap_v2_pools WHERE address=$1
+		UNION ALL SELECT 'robinhood' FROM robinhood_uniswap_v3_pools WHERE address=$1
+		UNION ALL SELECT 'robinhood' FROM robinhood_uniswap_v4_pools WHERE address=$1
+		UNION ALL SELECT 'solana' FROM raydium_pools WHERE address=$1
+		UNION ALL SELECT 'solana' FROM meteora_damm_v2_pools WHERE address=$1
+		UNION ALL SELECT 'solana' FROM meteora_dlmm_pools WHERE address=$1
+		UNION ALL SELECT 'solana' FROM orca_whirlpools WHERE address=$1
+		LIMIT 1`, pairID).Scan(&network)
+	if err != nil {
+		return "all"
+	}
+	return normalizeNetwork(network)
+}
+
 func listenForPairEvents(db *sql.DB, cache *pairCache, hub *pairHub) {
 	listener := pq.NewListener(databaseURLFromDB(db), 10*time.Second, time.Minute, func(ev pq.ListenerEventType, err error) {
 		if err != nil {
@@ -3651,6 +3709,30 @@ func listenForPairEvents(db *sql.DB, cache *pairCache, hub *pairHub) {
 		return
 	}
 	defer listener.Close()
+	pending := make(map[string]map[string]pairEventNotification)
+	flushTimer := time.NewTimer(time.Hour)
+	if !flushTimer.Stop() {
+		<-flushTimer.C
+	}
+	defer flushTimer.Stop()
+	keepAlive := time.NewTicker(30 * time.Second)
+	defer keepAlive.Stop()
+	flushPending := func() {
+		batch := pending
+		pending = make(map[string]map[string]pairEventNotification)
+		for network, events := range batch {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			pairs, err := cache.refresh(ctx, db, network, 400)
+			cancel()
+			if err != nil {
+				log.Printf("pair event refresh failed for %s: %v", network, err)
+				continue
+			}
+			for _, payload := range pairEventBatchPayloads(network, events, pairs) {
+				hub.broadcast(payload)
+			}
+		}
+	}
 	for {
 		select {
 		case notification := <-listener.Notify:
@@ -3663,17 +3745,21 @@ func listenForPairEvents(db *sql.DB, cache *pairCache, hub *pairHub) {
 				continue
 			}
 			event.Network = pairEventNetwork(event)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			pairs, err := cache.refresh(ctx, db, event.Network, 400)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if event.Network == "all" && event.PairID != "" {
+				event.Network = resolvePairNetwork(ctx, db, event.PairID)
+			}
 			cancel()
-			if err != nil {
-				log.Printf("pair event refresh failed for %s: %v", event.Network, err)
-				continue
+			if len(pending) == 0 {
+				flushTimer.Reset(200 * time.Millisecond)
 			}
-			if payload := pairEventPayload(event, pairs); payload != nil {
-				hub.broadcast(payload)
+			if pending[event.Network] == nil {
+				pending[event.Network] = make(map[string]pairEventNotification)
 			}
-		case <-time.After(30 * time.Second):
+			pending[event.Network][event.PairID] = event
+		case <-flushTimer.C:
+			flushPending()
+		case <-keepAlive.C:
 			if err := listener.Ping(); err != nil {
 				log.Printf("pair event listener ping failed: %v", err)
 				return

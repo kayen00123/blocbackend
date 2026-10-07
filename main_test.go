@@ -405,6 +405,34 @@ func TestPairEventPayloadRemovesDeletedPair(t *testing.T) {
 	}
 }
 
+func TestPairEventBatchPayloadsIncludeOnlyChangedPairs(t *testing.T) {
+	events := map[string]pairEventNotification{
+		"pool-1": {PairID: "pool-1", Action: "UPDATE"},
+		"pool-2": {PairID: "pool-2", Action: "UPDATE"},
+		"pool-3": {PairID: "pool-3", Action: "DELETE"},
+	}
+	payloads := pairEventBatchPayloads("base", events, []Pair{
+		{ID: "pool-1"},
+		{ID: "pool-2"},
+		{ID: "unrelated"},
+	})
+	if len(payloads) != 2 {
+		t.Fatalf("got %d payloads, want one update and one removal", len(payloads))
+	}
+	update, ok := payloads[0].(map[string]any)
+	if !ok || update["type"] != "pair_update" || update["network"] != "base" {
+		t.Fatalf("unexpected batched update: %#v", payloads[0])
+	}
+	updatedPairs, ok := update["pairs"].([]Pair)
+	if !ok || len(updatedPairs) != 2 {
+		t.Fatalf("update should contain two changed pairs, got %#v", update["pairs"])
+	}
+	removal, ok := payloads[1].(map[string]any)
+	if !ok || removal["type"] != "pair_removed" || removal["pairId"] != "pool-3" {
+		t.Fatalf("unexpected batched removal: %#v", payloads[1])
+	}
+}
+
 func TestFillInactiveCandleGapsCarriesForwardClose(t *testing.T) {
 	candles := fillInactiveCandleGaps([]PairCandle{
 		{Timestamp: 60_000, Open: 10, High: 11, Low: 9, Close: 10, Volume: 2},
