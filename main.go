@@ -2818,14 +2818,6 @@ func fillInactiveCandleGaps(candles []PairCandle, interval string, limit int) []
 	return filled
 }
 
-func pairCandleQueryOrder(startTime, endTime int64) string {
-	if startTime == 0 && endTime == 0 {
-		return "DESC"
-	}
-	return "ASC"
-}
-
-// pairCandlesHandler returns canonical pool candles merged with DEX fill candles.
 func pairCandlesHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		poolAddress := strings.TrimSpace(r.PathValue("id"))
@@ -2867,7 +2859,7 @@ func pairCandlesHandler(db *sql.DB) http.HandlerFunc {
 			args = append(args, endTime)
 			query += fmt.Sprintf(" AND bucket_start <= $%d", len(args))
 		}
-		query += fmt.Sprintf(" ORDER BY bucket_start %s LIMIT $%d", pairCandleQueryOrder(startTime, endTime), len(args)+1)
+		query += fmt.Sprintf(" ORDER BY bucket_start ASC LIMIT $%d", len(args)+1)
 		args = append(args, limit)
 
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
