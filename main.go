@@ -2818,6 +2818,14 @@ func fillInactiveCandleGaps(candles []PairCandle, interval string, limit int) []
 	return filled
 }
 
+func pairCandleQueryOrder(startTime, endTime int64) string {
+	if startTime == 0 && endTime == 0 {
+		return "DESC"
+	}
+	return "ASC"
+}
+
+// pairCandlesHandler returns canonical pool candles merged with DEX fill candles.
 func pairCandlesHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		poolAddress := strings.TrimSpace(r.PathValue("id"))
@@ -2859,7 +2867,7 @@ func pairCandlesHandler(db *sql.DB) http.HandlerFunc {
 			args = append(args, endTime)
 			query += fmt.Sprintf(" AND bucket_start <= $%d", len(args))
 		}
-		query += fmt.Sprintf(" ORDER BY bucket_start ASC LIMIT $%d", len(args)+1)
+		query += fmt.Sprintf(" ORDER BY bucket_start %s LIMIT $%d", pairCandleQueryOrder(startTime, endTime), len(args)+1)
 		args = append(args, limit)
 
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -3550,9 +3558,23 @@ func ensurePairEventTriggers(db *sql.DB) error {
 				'table_name', TG_TABLE_NAME,
 				'action', TG_OP,
 				'network', COALESCE(
-					(row_to_json(NEW) ->> 'network'),
-					(row_to_json(OLD) ->> 'network'),
-					'all'
+					NULLIF(row_to_json(NEW) ->> 'network', ''),
+					NULLIF(row_to_json(OLD) ->> 'network', ''),
+					CASE
+						WHEN TG_TABLE_NAME LIKE 'bsc_%' THEN 'bsc'
+						WHEN TG_TABLE_NAME LIKE 'base_%' OR TG_TABLE_NAME = 'aerodrome_slipstream_pools' THEN 'base'
+						WHEN TG_TABLE_NAME LIKE 'robinhood_%' THEN 'robinhood'
+						WHEN TG_TABLE_NAME IN ('raydium_pools', 'meteora_damm_v2_pools', 'meteora_dlmm_pools', 'orca_whirlpools') THEN 'solana'
+						ELSE 'all'
+					END
+				),
+				'pair_id', COALESCE(
+					NULLIF(row_to_json(NEW) ->> 'address', ''),
+					NULLIF(row_to_json(OLD) ->> 'address', ''),
+					NULLIF(row_to_json(NEW) ->> 'pool_address', ''),
+					NULLIF(row_to_json(OLD) ->> 'pool_address', ''),
+					NULLIF(row_to_json(NEW) ->> 'pair_id', ''),
+					NULLIF(row_to_json(OLD) ->> 'pair_id', '')
 				)
 			)::text);
 			RETURN NULL;
@@ -3578,6 +3600,46 @@ func ensurePairEventTriggers(db *sql.DB) error {
 	return nil
 }
 
+type pairEventNotification struct {
+	TableName string `json:"table_name"`
+	Action    string `json:"action"`
+	Network   string `json:"network"`
+	PairID    string `json:"pair_id"`
+}
+
+func pairEventNetwork(event pairEventNotification) string {
+	if network := normalizeNetwork(event.Network); network != "all" {
+		return network
+	}
+	switch {
+	case strings.HasPrefix(event.TableName, "bsc_"):
+		return "bsc"
+	case strings.HasPrefix(event.TableName, "base_"), event.TableName == "aerodrome_slipstream_pools":
+		return "base"
+	case strings.HasPrefix(event.TableName, "robinhood_"):
+		return "robinhood"
+	case event.TableName == "raydium_pools", event.TableName == "meteora_damm_v2_pools", event.TableName == "meteora_dlmm_pools", event.TableName == "orca_whirlpools":
+		return "solana"
+	default:
+		return "all"
+	}
+}
+
+func pairEventPayload(event pairEventNotification, pairs []Pair) any {
+	if event.PairID == "" {
+		return map[string]any{"type": "snapshot", "network": event.Network, "pairs": pairs}
+	}
+	if strings.EqualFold(event.Action, "DELETE") {
+		return map[string]any{"type": "pair_removed", "network": event.Network, "pairId": event.PairID}
+	}
+	for _, pair := range pairs {
+		if pair.ID == event.PairID {
+			return map[string]any{"type": "pair_update", "network": pair.Network, "pairs": []Pair{pair}}
+		}
+	}
+	return nil
+}
+
 func listenForPairEvents(db *sql.DB, cache *pairCache, hub *pairHub) {
 	listener := pq.NewListener(databaseURLFromDB(db), 10*time.Second, time.Minute, func(ev pq.ListenerEventType, err error) {
 		if err != nil {
@@ -3595,18 +3657,21 @@ func listenForPairEvents(db *sql.DB, cache *pairCache, hub *pairHub) {
 			if notification == nil {
 				continue
 			}
-			log.Printf("pair event: %s", notification.Extra)
-			for _, network := range []string{"all", "bsc", "base", "solana", "robinhood"} {
-				pairs, err := cache.refresh(context.Background(), db, network, 400)
-				if err != nil {
-					log.Printf("pair event refresh failed for %s: %v", network, err)
-					continue
-				}
-				hub.broadcast(map[string]any{
-					"type":    "snapshot",
-					"network": network,
-					"pairs":   pairs,
-				})
+			var event pairEventNotification
+			if err := json.Unmarshal([]byte(notification.Extra), &event); err != nil {
+				log.Printf("invalid pair event notification: %v", err)
+				continue
+			}
+			event.Network = pairEventNetwork(event)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			pairs, err := cache.refresh(ctx, db, event.Network, 400)
+			cancel()
+			if err != nil {
+				log.Printf("pair event refresh failed for %s: %v", event.Network, err)
+				continue
+			}
+			if payload := pairEventPayload(event, pairs); payload != nil {
+				hub.broadcast(payload)
 			}
 		case <-time.After(30 * time.Second):
 			if err := listener.Ping(); err != nil {

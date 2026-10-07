@@ -382,6 +382,29 @@ func TestPairHubBroadcastSerializesConcurrentWrites(t *testing.T) {
 	}
 }
 
+func TestPairEventPayloadBroadcastsOnlyChangedPair(t *testing.T) {
+	event := pairEventNotification{TableName: "bsc_pancakeswap_v2_pools", Action: "UPDATE", PairID: "pool-1"}
+	payload, ok := pairEventPayload(event, []Pair{{ID: "pool-1"}, {ID: "pool-2"}}).(map[string]any)
+	if !ok || payload["type"] != "pair_update" {
+		t.Fatalf("unexpected pair update payload: %#v", payload)
+	}
+	pairs, ok := payload["pairs"].([]Pair)
+	if !ok || len(pairs) != 1 || pairs[0].ID != "pool-1" {
+		t.Fatalf("pair update should contain only the changed pair, got %#v", payload["pairs"])
+	}
+	if got := pairEventNetwork(event); got != "bsc" {
+		t.Fatalf("network = %q, want bsc", got)
+	}
+}
+
+func TestPairEventPayloadRemovesDeletedPair(t *testing.T) {
+	event := pairEventNotification{Action: "DELETE", Network: "solana", PairID: "pool-1"}
+	payload, ok := pairEventPayload(event, nil).(map[string]any)
+	if !ok || payload["type"] != "pair_removed" || payload["pairId"] != "pool-1" {
+		t.Fatalf("unexpected pair removal payload: %#v", payload)
+	}
+}
+
 func TestFillInactiveCandleGapsCarriesForwardClose(t *testing.T) {
 	candles := fillInactiveCandleGaps([]PairCandle{
 		{Timestamp: 60_000, Open: 10, High: 11, Low: 9, Close: 10, Volume: 2},
